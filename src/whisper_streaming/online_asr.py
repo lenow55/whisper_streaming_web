@@ -315,7 +315,7 @@ class OnlineASRProcessor:
         """
         o = self.transcript_buffer.complete()
         f = self.concatenate_tsw(o)
-        logger.debug(f"last, noncommited: {f[0]*1000:.0f}-{f[1]*1000:.0f}: {f[2][0]*1000:.0f}-{f[1]*1000:.0f}: {f[2]}")
+        # logger.debug(f"last, noncommited: {f[0]*1000:.0f}-{f[1]*1000:.0f}: {f[2][0]*1000:.0f}-{f[1]*1000:.0f}: {f[2]}")
         self.buffer_time_offset += len(self.audio_buffer) / 16000
         return f
 
