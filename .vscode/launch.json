@@ -1,0 +1,19 @@
+{
+  "configurations": [
+    {
+      "name": "run server",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "uvicorn",
+      "args": [
+        "src.__main__:app",
+        "--host=localhost",
+        "--port=8790",
+        "--reload",
+        "--ssl-certfile=./cert.pem",
+        "--ssl-keyfile=./key.pem"
+      ],
+      "justMyCode": false
+    }
+  ]
+}
