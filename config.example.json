@@ -1,0 +1,12 @@
+{
+  "whisper": {
+    "model": "small",
+    "model_cache_dir": ".cache/",
+    "language": "ru",
+    "backend": "faster-whisper"
+  },
+  "vad": {
+    "vac": true
+  },
+  "buffer_trimming": "segment"
+}
