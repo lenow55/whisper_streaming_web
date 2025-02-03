@@ -107,6 +107,7 @@ class FasterWhisperASR(ASRBase):
             model_size_or_path,
             device="cuda",
             compute_type="float16",
+            device_index=1,
             download_root=cache_dir,
         )
 

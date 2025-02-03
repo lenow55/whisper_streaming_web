@@ -1,4 +1,6 @@
 from diart import SpeakerDiarization
+import torch
+from diart import SpeakerDiarization, SpeakerDiarizationConfig, models
 from diart.inference import StreamingInference
 from diart.sources import AudioSource
 from rx.subject import Subject
@@ -33,7 +35,17 @@ class WebSocketAudioSource(AudioSource):
 
 
 def create_pipeline(SAMPLE_RATE):
-    diar_pipeline = SpeakerDiarization()
+    segmentation = models.SegmentationModel.from_pyannote(
+        "pyannote/segmentation-3.0"
+    )
+    embedding = models.EmbeddingModel.from_pyannote(
+        "pyannote/wespeaker-voxceleb-resnet34-LM"
+    )
+    device = torch.device(type="cuda",index=1)
+
+    config = SpeakerDiarizationConfig(segmentation=segmentation, embedding=embedding, device=device)
+
+    diar_pipeline = SpeakerDiarization(config=config)
     ws_source = WebSocketAudioSource(uri="websocket_source", sample_rate=SAMPLE_RATE)
     inference = StreamingInference(
         pipeline=diar_pipeline,
