@@ -25,9 +25,6 @@ with open("src/web/live_transcription.html", "r", encoding="utf-8") as f:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    if app_config.diarization:
-        from src.diarization.diarization_online import DiartDiarization
-
     asr, tokenizer = backend_factory(app_config)
     app.state.asr = asr
     app.state.tokenizer = tokenizer
@@ -77,6 +74,7 @@ def done_callback(futr: asyncio.Task[Any]):
         # or just raise
         raise
 
+
 @app.websocket("/asr")
 async def websocket_endpoint(websocket: WebSocket):
     await websocket.accept()
@@ -91,6 +89,8 @@ async def websocket_endpoint(websocket: WebSocket):
     print("Online loaded.")
 
     if app_config.diarization:
+        from src.diarization.diarization_online import DiartDiarization
+
         diarization = DiartDiarization(SAMPLE_RATE)
 
     # Continuously read decoded PCM from ffmpeg stdout in a background task

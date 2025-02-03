@@ -1,12 +1,13 @@
-from diart import SpeakerDiarization
+import asyncio
+import threading
+
+import numpy as np
 import torch
 from diart import SpeakerDiarization, SpeakerDiarizationConfig, models
 from diart.inference import StreamingInference
 from diart.sources import AudioSource
 from rx.subject import Subject
-import threading
-import numpy as np
-import asyncio
+
 
 class WebSocketAudioSource(AudioSource):
     """
