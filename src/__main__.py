@@ -1,17 +1,22 @@
-import io
 import argparse
 import asyncio
-import numpy as np
-import ffmpeg
+from contextlib import asynccontextmanager
+import io
 from time import time
+from typing import Any
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
-from fastapi.responses import HTMLResponse
+import ffmpeg
+import numpy as np
+from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import HTMLResponse
 
-from src.whisper_streaming.whisper_online import backend_factory, online_factory, add_shared_args
-
-
+from src.config import app_config
+from src.whisper_streaming.whisper_online import (
+    backend_factory,
+    online_factory,
+)
+from src.constants import *
 import logging
 import logging.config
 
@@ -66,11 +71,21 @@ setup_logging()
 logger = logging.getLogger(__name__)
 
 
+# Load demo HTML for the root endpoint
+with open("src/web/live_transcription.html", "r", encoding="utf-8") as f:
+    html = f.read()
 
 
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    asr, tokenizer = backend_factory(app_config)
+    app.state.asr = asr
+    app.state.tokenizer = tokenizer
+
+    yield
 
 
-app = FastAPI()
+app = FastAPI(lifespan=lifespan)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -80,55 +95,9 @@ app.add_middleware(
 )
 
 
-parser = argparse.ArgumentParser(description="Whisper FastAPI Online Server")
-parser.add_argument(
-    "--host",
-    type=str,
-    default="localhost",
-    help="The host address to bind the server to.",
-)
-parser.add_argument(
-    "--port", type=int, default=8000, help="The port number to bind the server to."
-)
-parser.add_argument(
-    "--warmup-file",
-    type=str,
-    dest="warmup_file",
-    help="The path to a speech audio wav file to warm up Whisper so that the very first chunk processing is fast. It can be e.g. https://github.com/ggerganov/whisper.cpp/raw/master/samples/jfk.wav .",
-)
-
-parser.add_argument(
-    "--diarization",
-    type=bool,
-    default=False,
-    help="Whether to enable speaker diarization.",
-)
-
-
-add_shared_args(parser)
-args = parser.parse_args()
-
-asr, tokenizer = backend_factory(args)
-
-if args.diarization:
-    from src.diarization.diarization_online import DiartDiarization
-
-
-# Load demo HTML for the root endpoint
-with open("src/web/live_transcription.html", "r", encoding="utf-8") as f:
-    html = f.read()
-
-
 @app.get("/")
 async def get():
     return HTMLResponse(html)
-
-
-SAMPLE_RATE = 16000
-CHANNELS = 1
-SAMPLES_PER_SEC = SAMPLE_RATE * int(args.min_chunk_size)
-BYTES_PER_SAMPLE = 2  # s16le = 2 bytes per sample
-BYTES_PER_SEC = SAMPLES_PER_SEC * BYTES_PER_SAMPLE
 
 
 async def start_ffmpeg_decoder():
@@ -138,6 +107,7 @@ async def start_ffmpeg_decoder():
     """
     process = (
         ffmpeg.input("pipe:0", format="webm")
+        # ffmpeg.input("pipe:0", format="mp3")
         .output(
             "pipe:1",
             format="s16le",
@@ -150,6 +120,14 @@ async def start_ffmpeg_decoder():
     return process
 
 
+def done_callback(futr: asyncio.Task[Any]):
+    try:
+        _ = futr.result()
+    except Exception as exc:
+        # do_something_with(exc) if you want to (like logging)
+        # or just raise
+        raise
+
 
 @app.websocket("/asr")
 async def websocket_endpoint(websocket: WebSocket):
@@ -159,10 +137,14 @@ async def websocket_endpoint(websocket: WebSocket):
     ffmpeg_process = await start_ffmpeg_decoder()
     pcm_buffer = bytearray()
     print("Loading online.")
-    online = online_factory(args, asr, tokenizer)
+    online = online_factory(
+        app_config, websocket.app.state.asr, websocket.app.state.tokenizer
+    )
     print("Online loaded.")
 
-    if args.diarization:
+    if app_config.diarization:
+        from src.diarization.diarization_online import DiartDiarization
+
         diarization = DiartDiarization(SAMPLE_RATE)
 
     # Continuously read decoded PCM from ffmpeg stdout in a background task
@@ -171,9 +153,9 @@ async def websocket_endpoint(websocket: WebSocket):
         loop = asyncio.get_event_loop()
         full_transcription = ""
         beg = time()
-        
+
         chunk_history = []  # Will store dicts: {beg, end, text, speaker}
-        
+
         while True:
             try:
                 elapsed_time = int(time() - beg)
@@ -202,61 +184,72 @@ async def websocket_endpoint(websocket: WebSocket):
                     pcm_buffer = bytearray()
                     online.insert_audio_chunk(pcm_array)
                     beg_trans, end_trans, trans = online.process_iter()
-                    
+
                     if trans:
-                        chunk_history.append({
-                        "beg": beg_trans,
-                        "end": end_trans,
-                        "text": trans,
-                        "speaker": "0"
-                        })
-                    
+                        chunk_history.append(
+                            {
+                                "beg": beg_trans,
+                                "end": end_trans,
+                                "text": trans,
+                                "speaker": "0",
+                            }
+                        )
+
                     full_transcription += trans
-                    if args.vac:
+                    if app_config.vad.vac:
                         buffer = online.online.concatenate_tsw(
                             online.online.transcript_buffer.buffer
                         )[
                             2
                         ]  # We need to access the underlying online object to get the buffer
                     else:
-                        buffer = online.concatenate_tsw(online.transcript_buffer.buffer)[2]
+                        buffer = online.concatenate_tsw(
+                            online.transcript_buffer.buffer
+                        )[2]
                     if (
                         buffer in full_transcription
                     ):  # With VAC, the buffer is not updated until the next chunk is processed
                         buffer = ""
-                                        
+
                     lines = [
                         {
                             "speaker": "0",
                             "text": "",
                         }
                     ]
-                    
-                    if args.diarization:
+
+                    if app_config.diarization:
                         await diarization.diarize(pcm_array)
                         diarization.assign_speakers_to_chunks(chunk_history)
 
                     for ch in chunk_history:
-                        if args.diarization and ch["speaker"] and ch["speaker"][-1] != lines[-1]["speaker"]:
+                        if (
+                            app_config.diarization
+                            and ch["speaker"]
+                            and ch["speaker"][-1] != lines[-1]["speaker"]
+                        ):
                             lines.append(
                                 {
                                     "speaker": ch["speaker"][-1],
-                                    "text": ch['text'],
+                                    "text": ch["text"],
                                 }
                             )
                         else:
-                            lines[-1]["text"] += ch['text']
+                            lines[-1]["text"] += ch["text"]
 
                     response = {"lines": lines, "buffer": buffer}
                     await websocket.send_json(response)
-                    
+
             except Exception as e:
                 print(f"Exception in ffmpeg_stdout_reader: {e}")
+                raise e
                 break
 
         print("Exiting ffmpeg_stdout_reader...")
 
     stdout_reader_task = asyncio.create_task(ffmpeg_stdout_reader())
+
+    stdout_reader_task.add_done_callback(done_callback)
 
     try:
         while True:
@@ -285,18 +278,7 @@ async def websocket_endpoint(websocket: WebSocket):
 
         ffmpeg_process.wait()
         del online
-        
-        if args.diarization:
+
+        if app_config.diarization:
             # Stop Diart
             diarization.close()
-
-
-
-
-if __name__ == "__main__":
-    import uvicorn
-
-    uvicorn.run(
-        "whisper_fastapi_online_server:app", host=args.host, port=args.port, reload=True,
-        log_level="info"
-    )
