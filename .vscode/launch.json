@@ -7,7 +7,7 @@
       "module": "uvicorn",
       "args": [
         "src.__main__:app",
-        "--host=localhost",
+        "--host=0.0.0.0",
         "--port=8790",
         "--reload",
         "--ssl-certfile=./cert.pem",
